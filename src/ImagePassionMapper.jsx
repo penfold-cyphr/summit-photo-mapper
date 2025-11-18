@@ -1,0 +1,736 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  RefreshCw, Upload, Sparkles, Image as ImageIcon, X, ImagePlus, AlertTriangle, 
+  Calendar, Camera, MapPin, ArrowLeft, Plus
+} from 'lucide-react';
+import * as ExifReader from 'exifreader';
+
+// --- Swiper Carousel Imports ---
+import { Swiper, SwiperSlide } from 'swiper/react';
+import { Pagination } from 'swiper/modules'; // <-- UPDATED: Removed Navigation
+import 'swiper/css';
+// import 'swiper/css/navigation'; // <-- UPDATED: Removed navigation CSS
+import 'swiper/css/pagination';
+
+// --- Constants and Configuration ---
+
+const MAX_FILES = 25;
+const API_MODEL = "gemini-2.5-flash-preview-09-2025";
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=`;
+
+const VERCEL_EMBEDDED_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
+
+const ALL_PASSIONS = [
+  // --- Nature & Outdoor Activities ---
+  "Wildlife", "Hike & Glamp", "Safari", "Ski & Snowboard", "Bike", "Trail Running", 
+  "Rock Climbing", "Fish", "Scuba & Snorkel", "Kayak & Canoe", "Surf", "Nature", 
+  "Paddleboarding", "Sailing & Boating", "Horse Riding", "Waterfront", "Mountains", 
+  "Adventure Sports",
+
+  // --- Sports & Physical Activities ---
+  "Golf", "Tennis", "Running", "Swimming", "Water Sports", "Cardio", 
+  "Strength Training", "Yoga",
+
+  // --- Travel & Culture ---
+  "Beach Retreat", "City Exploration", "Local Culture", "Landmarks", "Museums",
+  "Historical Events", "Architecture",
+
+  // --- Food & Drink ---
+  "Restaurants", "Foodie Trends", "Fine Dining", "Local Cuisine", "Cooking & Baking",
+  "Wine", "Beer", "Spirits", "Coffee", "Mixology",
+
+  // --- Health & Wellness ---
+  "Longevity", "Medical", "Mindfulness", "Healthy Food", "Self-care & Pamper", "Sleep",
+
+  // --- Home, Family & Social Life ---
+  "Home & Garden", "Kids & Grandkids", "Pets", "Friends", "Community Care",
+
+  // --- Knowledge, Tech & Societal Interests ---
+  "Business & Finance", "Skill Building", "Pro. Development", "Emerging Tech",
+  "Sustainability", "Politics & Current Events", "STEM",
+
+  // --- Arts, Creation & Hobbies ---
+  "Art & Photography", "Painting & Drawing", "Sculpting", "Crafts", "Creation",
+  "Theater", "Literature", "Music", "Festivals & Concerts",
+
+  // --- Collecting & Specialized Interests ---
+  "Classic Cars", "Antiques & Vintage", "Fashion", "Beauty", "Shopping",
+
+  // --- Entertainment & Fandom ---
+  "Artist Fandom", "Show Fandom", "Movie Genres", "Hollywood Culture", "Actor Fandom",
+  "Animation & Fandom", "Video Games", "Gambling", "Theme Parks",
+
+  // --- Competitive Sports Fandom ---
+  "Football", "Formula 1", "Soccer", "Basketball", "Baseball", "Winter Sports"
+];
+
+const PROMPT_TEMPLATE = (passionList, metadataContext) => `
+Analyze the provided image and its metadata.
+Metadata Context: ${metadataContext}
+
+1. Describe the main activity or context of the photo in one concise sentence. Use the metadata (especially location or date) to add context if relevant (e.g., "A person skiing in [Location]" or "A family celebrating [Event] in [Year]").
+2. Based on the activities, context, and metadata, map the image content to the following list of passions: [${passionList.join(', ')}].
+3. **IMPORTANT RULE for 'Art & Photography':** Only match 'Art & Photography' if the photo depicts someone actively **taking a picture**, **creating art**, or **viewing art/exhibits**. Do not match it simply because the image is a photograph.
+4. Select the most relevant passions and categorize them:
+   - 'High' confidence: Select a minimum of 1 and a maximum of 5 passions.
+   - 'Suggested' confidence: Select a minimum of 1 and a maximum of 5 passions.
+   - **DO NOT** use any other confidence labels (e.g., 'Medium').
+5. Provide the output only in the requested JSON format.
+`;
+
+const RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    description: { "type": "STRING", "description": "A brief, 1-sentence summary of the main activity/context found in the photo." },
+    matchedPassions: {
+      "type": "ARRAY",
+      "description": "A list of 2 to 10 passions from the provided list that best match the photo's content, categorized by confidence level (High or Suggested).",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "passionName": { "type": "STRING", "description": "The name of the passion from the provided list." },
+          "confidence": { "type": "STRING", "description": "Must be one of: 'High' or 'Suggested'." }
+        },
+        "required": ["passionName", "confidence"]
+      }
+    }
+  },
+  required: ["description", "matchedPassions"]
+};
+
+
+// --- Utility Functions ---
+
+const toBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.readAsDataURL(file);
+  reader.onload = () => resolve(reader.result.split(',')[1]);
+  reader.onerror = (error) => reject(error);
+});
+
+const exponentialBackoffFetch = async (url, options, maxRetries = 3) => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.ok) {
+        return response;
+      }
+      if (response.status === 429 && attempt < maxRetries - 1) {
+        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        console.warn(`Retrying API call in ${delay}ms... (Attempt ${attempt + 1})`);
+        continue;
+      }
+      throw new Error(`API call failed with status: ${response.status} ${response.statusText}`);
+    } catch (error) {
+      if (attempt === maxRetries - 1) {
+        console.error("Fetch failed after all retries:", error);
+        throw error;
+      }
+      const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+      await new Promise(resolve => setTimeout(resolve, delay));
+      console.warn(`Retrying network failure in ${delay}ms... (Attempt ${attempt + 1})`);
+    }
+  }
+};
+
+
+// --- React Components ---
+
+const ImagePreview = ({ file, isProcessing, onRemove, index }) => {
+  const [previewUrl, setPreviewUrl] = useState(null);
+
+  useEffect(() => {
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+  }, [file]);
+
+  return (
+    <div className="relative w-full aspect-square rounded-lg overflow-hidden shadow-sm border border-gray-200">
+      {previewUrl ? (
+        <img src={previewUrl} alt={file.name} className="w-full h-full object-cover" />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center bg-gray-50">
+          <ImageIcon className="w-8 h-8 text-gray-400" />
+        </div>
+      )}
+      {isProcessing && (
+        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+          <RefreshCw className="w-6 h-6 text-white animate-spin" />
+        </div>
+      )}
+      {onRemove && (
+        <button
+          onClick={() => onRemove(index)}
+          className="absolute top-1 right-1 bg-white text-gray-700 rounded-full p-1 shadow-md hover:bg-gray-100 transition"
+          aria-label={`Remove ${file.name}`}
+        >
+          <X className="w-4 h-4" />
+        </button>
+      )}
+    </div>
+  );
+};
+
+
+// --- SCREEN 1: UPLOAD SCREEN ---
+
+const UploadScreen = ({ 
+  selectedFiles, 
+  results, 
+  loading, 
+  error, 
+  handleFileChange, 
+  removeFile, 
+  analyzeImages 
+}) => {
+  const fileInputRef = useRef(null);
+  const displayApiKey = VERCEL_EMBEDDED_API_KEY;
+  const isButtonDisabled = loading || selectedFiles.length === 0 || !displayApiKey;
+  const numProcessed = results.filter(r => !r.processing && (r.data || r.error)).length;
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header className="text-center mb-12">
+        <h1 className="text-4xl sm:text-5xl font-extrabold text-gray-800 flex flex-col items-center justify-center gap-2">
+          Fora Photo Passions
+        </h1>
+        <p className="text-gray-600 mt-3 text-lg sm:text-xl">Discover the passions hidden in your travel photos.</p>
+      </header>
+
+      {!displayApiKey && (
+        <div className="mb-8 p-4 bg-yellow-100 text-yellow-800 rounded-lg border border-yellow-300 font-medium text-center flex items-center justify-center gap-2">
+          <AlertTriangle className="w-5 h-5" /> 
+          **API Key Required:** Please deploy to Vercel and set the `VITE_GEMINI_API_KEY` environment variable.
+        </div>
+      )}
+
+      <section className="mb-12 p-6 bg-gray-50 rounded-lg shadow-sm border border-gray-200">
+        <h2 className="text-2xl font-semibold text-gray-800 mb-6 flex items-center gap-3">
+          <ImagePlus className="w-6 h-6 text-indigo-500" /> Upload Your Memories (Max {MAX_FILES})
+        </h2>
+        <label
+          htmlFor="file-upload"
+          className="flex flex-col items-center justify-center p-10 border-2 border-dashed border-indigo-300 rounded-lg cursor-pointer hover:bg-indigo-50 transition duration-200 text-center"
+        >
+          <Upload className="w-12 h-12 text-indigo-500 mb-4" />
+          <p className="text-indigo-600 font-medium text-lg">Click to browse or drag your photos here</p>
+          <p className="text-sm text-gray-500 mt-2">
+            JPG, PNG, GIF up to {MAX_FILES} files
+          </p>
+          <input
+            id="file-upload"
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={(e) => handleFileChange(e, fileInputRef)}
+            className="hidden"
+            ref={fileInputRef}
+          />
+        </label>
+
+        {error && <div className="mt-6 p-4 bg-red-100 text-red-700 rounded-md font-medium">{error}</div>}
+
+        {selectedFiles.length > 0 && (
+          <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            {selectedFiles.map((file, index) => (
+              <ImagePreview
+                key={file.name + index}
+                file={file}
+                isProcessing={results.find(r => r.file === file)?.processing || false}
+                onRemove={removeFile}
+                index={index}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {selectedFiles.length > 0 && (
+        <section className="mb-12 text-center">
+          <button
+            onClick={analyzeImages}
+            disabled={isButtonDisabled}
+            className={`w-full max-w-lg py-4 px-8 rounded-full text-xl font-bold transition-all duration-300 shadow-lg
+              ${isButtonDisabled
+                ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                : 'bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-4 focus:ring-indigo-300 hover:scale-[1.01]'
+              }
+              flex items-center justify-center gap-3`}
+          >
+            {loading ? (
+              <>
+                <RefreshCw className="w-6 h-6 animate-spin" />
+                Analyzing {Math.min(numProcessed + 1, selectedFiles.length)} of {selectedFiles.length} photos...
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-6 h-6" />
+                Analyze Photos
+              </>
+            )}
+          </button>
+        </section>
+      )}
+    </div>
+  );
+};
+
+
+// --- ================================== ---
+// --- RESULT CARD (FOR SCREEN 2) ---
+// --- ================================== ---
+
+const ResultCard = ({ result, file, allPassions, onPassionAdd, onPassionToggle }) => {
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [showAddPassions, setShowAddPassions] = useState(false);
+
+  useEffect(() => {
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+  }, [file]);
+
+  const getConfidenceClass = (confidence) => {
+    switch (confidence) {
+      case 'High':
+        return 'bg-green-100 text-green-800 border-green-300'; // Identified (Green)
+      case 'Suggested':
+        return 'bg-blue-100 text-blue-800 border-blue-300'; // Suggested (Blue)
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-300';
+    }
+  };
+
+  const isError = result.error;
+  const { metadata } = result;
+  
+  const currentPassionNames = (result.matchedPassions || []).map(p => p.passionName);
+  const availablePassions = allPassions.filter(p => !currentPassionNames.includes(p));
+
+  // Sort passions: High first, then Suggested
+  const sortedPassions = [...(result.matchedPassions || [])].sort((a, b) => {
+    if (a.confidence === b.confidence) return 0;
+    return a.confidence === 'High' ? -1 : 1;
+  });
+
+  return (
+    <div className={`flex flex-col p-4 rounded-lg border ${isError ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white'} shadow-sm h-full`}>
+      {/* Image Preview */}
+      <div className="flex-shrink-0 w-full h-48 md:h-64 rounded-md overflow-hidden bg-gray-100 flex items-center justify-center">
+        {previewUrl ? (
+          <img src={previewUrl} alt={result.fileName} className="w-full h-full object-cover" />
+        ) : (
+          <ImageIcon className="w-10 h-10 text-gray-400" />
+        )}
+      </div>
+
+      <div className="flex-grow mt-4 flex flex-col">
+        <h3 className="text-xl font-semibold text-gray-800 mb-2 truncate" title={result.fileName}>
+          {result.fileName}
+        </h3>
+        
+        {/* Metadata */}
+        {metadata && (metadata.date || metadata.camera || metadata.location) && (
+          <div className="text-xs text-gray-500 mb-3 flex flex-wrap gap-x-4 gap-y-1 items-center">
+            {metadata.date && (
+              <span className="flex items-center gap-1.5" title="Date Taken">
+                <Calendar className="w-3.5 h-3.5" /> {metadata.date}
+              </span>
+            )}
+            {metadata.camera && (
+              <span className="flex items-center gap-1.5" title="Camera Model">
+                <Camera className="w-3.5 h-3.5" /> {metadata.camera}
+              </span>
+            )}
+            {metadata.location && (
+              <a 
+                href={`https://www.google.com/maps?q=${metadata.location.lat},${metadata.location.lng}`} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 text-blue-600 hover:underline"
+                title="View on Map"
+              >
+                <MapPin className="w-3.5 h-3.5" /> View Map
+              </a>
+            )}
+          </div>
+        )}
+
+        {isError ? (
+          <p className="text-red-600 font-medium flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5" /> Error: {result.error}
+          </p>
+        ) : (
+          <>
+            {/* Description */}
+            <p className="text-gray-600 mb-3 text-sm leading-relaxed">
+              <span className="font-medium text-gray-700">Context:</span> {result.description || 'No description provided.'}
+            </p>
+            
+            {/* Matched Passions (Tappable to TOGGLE) */}
+            <h4 className="font-semibold text-sm text-gray-700 mb-2">Matched Passions</h4>
+            <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
+              {sortedPassions.length > 0 ? (
+                sortedPassions.map((match, i) => (
+                  <button 
+                    key={i} 
+                    onClick={() => onPassionToggle(match.passionName)}
+                    className={`text-xs font-medium py-1 px-3 rounded-full border ${getConfidenceClass(match.confidence)} flex items-center gap-1.5 hover:opacity-75 transition-opacity`}
+                    title={match.confidence === 'High' 
+                      ? `Click to move to 'Suggested'` 
+                      : `Click to move to 'High'`}
+                  >
+                    {match.passionName}
+                    
+                    {match.confidence === 'High' ? (
+                      <X className="w-3 h-3 text-gray-500" />
+                    ) : (
+                      <Plus className="w-3 h-3 text-gray-500" />
+                    )}
+
+                  </button>
+                ))
+              ) : (
+                <p className="text-sm text-gray-400 italic">No passions matched.</p>
+              )}
+            </div>
+
+            {/* Add Passions Section (Tappable to Add as 'High') */}
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <button
+                onClick={() => setShowAddPassions(!showAddPassions)}
+                className="flex items-center gap-2 text-sm font-medium text-indigo-600 hover:text-indigo-800"
+              >
+                <Plus className="w-4 h-4" /> {showAddPassions ? 'Hide Suggestions' : 'Add Passions'}
+              </button>
+              
+              {showAddPassions && (
+                <div className="flex flex-wrap gap-2 mt-3 max-h-32 overflow-y-auto pr-2">
+                  {availablePassions.map((passionName, i) => (
+                    <button
+                      key={i}
+                      onClick={() => onPassionAdd(passionName, 'High')}
+                      className="text-xs font-medium py-1 px-3 rounded-full border bg-gray-50 text-gray-700 border-gray-200 flex items-center gap-1.5 hover:bg-gray-100 hover:border-gray-400 transition"
+                      title={`Click to add '${passionName}' (High)`}
+                    >
+                      {passionName}
+                      <Plus className="w-3 h-3 text-gray-500" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+
+// --- =============================== ---
+// --- UPDATED RESULTS SCREEN (CAROUSEL) ---
+// --- =============================== ---
+
+const ResultsScreen = ({ results, onGoBack, onUpdatePassions }) => {
+  
+  const handlePassionAdd = (resultIndex, passionName, confidence) => {
+    const currentPassions = results[resultIndex].data.matchedPassions;
+    if (currentPassions.find(p => p.passionName === passionName)) return;
+
+    const newPassions = [
+      ...currentPassions,
+      { passionName, confidence }
+    ];
+    onUpdatePassions(resultIndex, newPassions);
+  };
+  
+  const handlePassionToggle = (resultIndex, passionName) => {
+    const currentPassions = results[resultIndex].data.matchedPassions;
+    
+    const newPassions = currentPassions.map(p => {
+      if (p.passionName === passionName) {
+        const newConfidence = p.confidence === 'High' ? 'Suggested' : 'High';
+        return { ...p, confidence: newConfidence };
+      }
+      return p;
+    });
+    
+    onUpdatePassions(resultIndex, newPassions);
+  };
+
+  const validResults = results.filter(r => !r.processing && (r.data || r.error));
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header className="mb-8 flex items-center justify-between">
+        <h1 className="text-3xl font-bold text-gray-800">
+          Your Photo Passions
+        </h1>
+        <button
+          onClick={onGoBack}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          Upload More
+        </button>
+      </header>
+      
+      {/* --- UPDATED: Padding changed from p-6 to p-2 sm:p-6 --- */}
+      <div className="p-2 sm:p-6 bg-white rounded-lg shadow-md border border-gray-100">
+        <Swiper
+          modules={[Pagination]} // <-- UPDATED: Removed Navigation
+          spaceBetween={30}
+          slidesPerView={1}
+          // navigation // <-- UPDATED: Removed prop
+          pagination={{ clickable: true }}
+          className="w-full"
+          style={{
+            // '--swiper-navigation-color': '#4F46E5', // <-- UPDATED: Removed
+            '--swiper-pagination-color': '#4F46E5', // Indigo
+          }}
+        >
+          {validResults.map((result, index) => (
+            // --- UPDATED: Padding changed from p-4 pb-10 to p-1 pb-10 ---
+            <SwiperSlide key={result.file.name + index} className="p-1 pb-10">
+              <ResultCard 
+                result={{ 
+                  ...result.data, 
+                  fileName: result.file.name, 
+                  error: result.error,
+                  metadata: result.metadata
+                }} 
+                file={result.file}
+                allPassions={ALL_PASSIONS}
+                onPassionAdd={(passionName, confidence) => handlePassionAdd(index, passionName, confidence)}
+                onPassionToggle={(passionName) => handlePassionToggle(index, passionName)}
+              />
+            </SwiperSlide>
+          ))}
+        </Swiper>
+        {validResults.length === 0 && (
+          <div className="text-center py-10 text-gray-500">
+            No results to display.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+
+// --- Main App Component (State Manager) ---
+
+const ImagePassionMapper = () => {
+  const [screen, setScreen] = useState('upload'); // 'upload' or 'results'
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [results, setResults] = useState([]); // Stores { file, data, error, processing, metadata }
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleFileChange = (event, fileInputRef) => {
+    setError(null);
+    setResults([]); // Clear old results when new files are added
+    const newFiles = Array.from(event.target.files).filter(file => file.type.startsWith('image/'));
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = null;
+    }
+
+    if (newFiles.length > MAX_FILES) {
+      setError(`Maximum of ${MAX_FILES} photos allowed. Please select fewer files.`);
+      setSelectedFiles([]);
+      return;
+    }
+    
+    if (newFiles.length === 0) {
+      return;
+    }
+
+    setSelectedFiles(newFiles.slice(0, MAX_FILES));
+  };
+
+  const removeFile = (indexToRemove) => {
+    if (loading) return;
+    setSelectedFiles(prev => {
+      const updatedFiles = prev.filter((_, i) => i !== indexToRemove);
+      setResults([]);
+      return updatedFiles;
+    });
+  };
+  
+  const handleGoBackToUpload = () => {
+    setScreen('upload');
+    setSelectedFiles([]);
+    setResults([]);
+    setError(null);
+  };
+  
+  const handleUpdatePassions = (resultIndex, newPassionsList) => {
+    setResults(prevResults => {
+      const newResults = [...prevResults];
+      const targetResult = newResults[resultIndex];
+      
+      if (targetResult && targetResult.data) {
+        newResults[resultIndex] = {
+          ...targetResult,
+          data: {
+            ...targetResult.data,
+            matchedPassions: newPassionsList
+          }
+        };
+      }
+      return newResults;
+    });
+  };
+
+  const analyzeImages = async () => {
+    if (selectedFiles.length === 0 || loading) return;
+
+    const currentApiKey = VERCEL_EMBEDDED_API_KEY; 
+    if (!currentApiKey) {
+      setError("API Key Missing! Please set the VITE_GEMINI_API_KEY environment variable.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    const processedFilesData = await Promise.all(selectedFiles.map(async (file) => {
+      try {
+        const [base64Data, tags] = await Promise.all([
+          toBase64(file),
+          ExifReader.load(file).catch(err => {
+            console.warn(`Could not read EXIF data for ${file.name}:`, err);
+            return {};
+          })
+        ]);
+
+        let metadataContext = "No additional metadata available.";
+        let extractedMetadata = { date: null, camera: null, location: null };
+        
+        const date = tags.DateTimeOriginal?.description;
+        const camera = tags.Model?.description;
+        const lat = tags.GPSLatitude?.description;
+        const lng = tags.GPSLongitude?.description; // <-- BUG FIX HERE
+
+        let metadataParts = [];
+        if (date) {
+          metadataParts.push(`Date taken: ${date}`);
+          extractedMetadata.date = date;
+        }
+        if (camera) {
+          metadataParts.push(`Camera: ${camera}`);
+          extractedMetadata.camera = camera;
+        }
+        if (lat !== undefined && lng !== undefined) {
+          extractedMetadata.location = { lat, lng };
+          metadataParts.push(`Location: (${lat.toFixed(6)}, ${lng.toFixed(6)})`);
+        }
+        if (metadataParts.length > 0) {
+          metadataContext = "Use the following metadata to improve the analysis: " + metadataParts.join('; ');
+        }
+        
+        return { file, base64Data, metadata: extractedMetadata, metadataContext, error: null };
+
+      } catch (preprocessingError) {
+        console.error(`Failed to preprocess ${file.name}:`, preprocessingError);
+        return { file, base64Data: null, metadata: null, metadataContext: null, error: preprocessingError.message || "Failed to read file" };
+      }
+    }));
+
+    const initialResults = processedFilesData.map(pf => ({
+      file: pf.file,
+      data: null,
+      error: pf.error,
+      processing: !pf.error,
+      metadata: pf.metadata
+    }));
+    setResults(initialResults);
+
+    const apiUrlWithKey = API_URL + currentApiKey;
+    let currentResults = [...initialResults];
+
+    for (let i = 0; i < processedFilesData.length; i++) {
+      const pf = processedFilesData[i];
+      
+      if (pf.error) continue; 
+      
+      try {
+        const prompt = PROMPT_TEMPLATE(ALL_PASSIONS, pf.metadataContext);
+        const mimeType = pf.file.type;
+
+        const payload = {
+          contents: [{
+            parts: [
+              { text: prompt },
+              { inlineData: { mimeType, data: pf.base64Data } }
+            ]
+          }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: RESPONSE_SCHEMA
+          }
+        };
+
+        const response = await exponentialBackoffFetch(apiUrlWithKey, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const apiResult = await response.json();
+        const candidate = apiResult.candidates?.[0];
+        const jsonText = candidate?.content?.parts?.[0]?.text;
+
+        if (jsonText) {
+          const parsedJson = JSON.parse(jsonText);
+          currentResults[i] = { ...currentResults[i], data: parsedJson, error: null, processing: false };
+        } else {
+          const errorMessage = apiResult.error?.message || apiResult.error?.details?.[0]?.message || "Model response was empty or malformed.";
+          console.error(`Error processing ${pf.file.name}:`, apiResult);
+          currentResults[i] = { ...currentResults[i], data: null, error: errorMessage, processing: false };
+        }
+      } catch (fileError) {
+        console.error(`Error with file ${pf.file.name}:`, fileError);
+        currentResults[i] = { ...currentResults[i], data: null, error: fileError.message || 'File processing failed', processing: false };
+      }
+
+      setResults([...currentResults]);
+    }
+    
+    setLoading(false);
+    setScreen('results'); // <-- Switch to results screen when done
+  };
+
+  return (
+    <div className="min-h-screen bg-white text-gray-900 font-sans">
+      {screen === 'upload' ? (
+        <UploadScreen
+          selectedFiles={selectedFiles}
+          results={results}
+          loading={loading}
+          error={error}
+          handleFileChange={handleFileChange}
+          removeFile={removeFile}
+          analyzeImages={analyzeImages}
+        />
+      ) : (
+        <ResultsScreen
+          results={results}
+          onGoBack={handleGoBackToUpload}
+          onUpdatePassions={handleUpdatePassions}
+        />
+      )}
+    </div>
+  );
+};
+
+export default ImagePassionMapper;
