@@ -14,61 +14,54 @@ const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_M
 const VERCEL_EMBEDDED_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
 
 const ALL_PASSIONS = [
-  // --- Nature & Outdoor Activities ---
-  "Wildlife", "Hike & Glamp", "Safari", "Ski & Snowboard", "Bike", "Trail Running", 
-  "Rock Climbing", "Fish", "Scuba & Snorkel", "Kayak & Canoe", "Surf", "Nature", 
-  "Paddleboarding", "Sailing & Boating", "Horse Riding", "Waterfront", "Mountains", 
-  "Adventure Sports",
+  // --- Headline Talks & Thought Leadership ---
+  "Keynote Talks (Main Stage)", "AI & Future Tech", "Business & Leadership", 
+  "Social Impact & Conservation", "Psychedelics & Healing", "Poetry & Storytelling",
 
-  // --- Sports & Physical Activities ---
-  "Golf", "Tennis", "Running", "Swimming", "Water Sports", "Cardio", 
-  "Strength Training", "Yoga",
+  // --- Music & Nightlife ---
+  "Live Music Performances", "DJ Sets & Dance Parties", "Vinyl Listening (Dante's HiFi+)", 
+  "Electronic & House Music", "Hip Hop & Culture", "Sunrise/Sunset Sets",
 
-  // --- Travel & Culture ---
-  "Beach Retreat", "City Exploration", "Local Culture", "Landmarks", "Museums",
-  "Historical Events", "Architecture",
+  // --- Wellness & Embodiment ---
+  "Morning Yoga & Flow", "Functional Fitness (Wimberlean)", "Meditation & Breathwork", 
+  "Neurosculpting & Mindset", "Sound Healing", "Intimacy & Connection Workshops", 
+  "Spa & Recovery",
+
+  // --- Arts & Entertainment ---
+  "Art Installations & Sculpture", "Live Painting", "Comedy Shows", "Interactive Performance", 
+  "Film Screenings", "The Great Bingo Revival",
 
   // --- Food & Drink ---
-  "Restaurants", "Foodie Trends", "Fine Dining", "Local Cuisine", "Cooking & Baking",
-  "Wine", "Beer", "Spirits", "Coffee", "Mixology",
+  "Culinary Experiences", "Michelin-Starred Dining", "Community Brunch (Kishi Bros)", 
+  "Mixology & Spirits", "Casual Dining",
 
-  // --- Health & Wellness ---
-  "Longevity", "Medical", "Mindfulness", "Healthy Food", "Self-care & Pamper", "Sleep",
+  // --- Community & Connection ---
+  "Singles Mixers", "Founder & Investor Meetups", "Climate & Impact Gatherings", 
+  "Women+ Community", "Workshops & Masterclasses",
 
-  // --- Home, Family & Social Life ---
-  "Home & Garden", "Kids & Grandkids", "Pets", "Friends", "Community Care",
-
-  // --- Knowledge, Tech & Societal Interests ---
-  "Business & Finance", "Skill Building", "Pro. Development", "Emerging Tech",
-  "Sustainability", "Politics & Current Events", "STEM",
-
-  // --- Arts, Creation & Hobbies ---
-  "Art & Photography", "Painting & Drawing", "Sculpting", "Crafts", "Creation",
-  "Theater", "Literature", "Music", "Festivals & Concerts",
-
-  // --- Collecting & Specialized Interests ---
-  "Classic Cars", "Antiques & Vintage", "Fashion", "Beauty", "Shopping",
-
-  // --- Entertainment & Fandom ---
-  "Artist Fandom", "Show Fandom", "Movie Genres", "Hollywood Culture", "Actor Fandom",
-  "Animation & Fandom", "Video Games", "Gambling", "Theme Parks",
-
-  // --- Competitive Sports Fandom ---
-  "Football", "Formula 1", "Soccer", "Basketball", "Baseball", "Winter Sports"
+  // --- Nature & Adventure ---
+  "Ocean & Marine Life", "Caribbean Views", "Sailing & Cruising"
 ];
 
 const PROMPT_TEMPLATE = (passionList, metadataContext) => `
-Analyze the provided image and its metadata.
+Analyze the provided image and its metadata to recommend itinerary items for **Summit at Sea 2024**.
 Metadata Context: ${metadataContext}
 
-1. Describe the main activity or context of the photo in one concise sentence. Use the metadata (especially location or date) to add context if relevant (e.g., "A person skiing in [Location]" or "A family celebrating [Event] in [Year]").
-2. Based on the activities, context, and metadata, map the image content to the following list of passions: [${passionList.join(', ')}].
-3. **IMPORTANT RULE for 'Art & Photography':** Only match 'Art & Photography' if the photo depicts someone actively **taking a picture**, **creating art**, or **viewing art/exhibits**. Do not match it simply because the image is a photograph.
-4. Select the most relevant passions and categorize them:
-   - 'High' confidence: Select a minimum of 1 and a maximum of 5 passions.
-   - 'Suggested' confidence: Select a minimum of 1 and a maximum of 5 passions.
-   - **DO NOT** use any other confidence labels (e.g., 'Medium').
-5. Provide the output only in the requested JSON format.
+The user is attending Summit at Sea 2024, a transformative festival on a cruise ship featuring world-class talks, wellness, and music.
+
+**Event Context for Matching:**
+- **Music:** Matches artists like Diplo, Moodymann, D-Nice, Just Blaze, or vibes like Dante's HiFi+ (vinyl).
+- **Talks:** Matches themes of AI, conservation (Jane Goodall/Ocean Conservancy vibes), business (Under Armour/Virgin), or spirituality (Robert Thurman).
+- **Wellness:** Matches yoga, fitness (Wimberlean), meditation (Ziva), or biohacking.
+- **Art:** Matches sculptures (Nikolai Haas), light art (Leo Villareal), or live performance.
+- **Food:** Matches fine dining or fun brunches.
+
+1. **Describe** the main activity or vibe of the photo in one concise sentence.
+2. **Map** the image content to the provided Summit at Sea 2024 itinerary items: [${passionList.join(', ')}].
+3. **Select** the most relevant itinerary items:
+   - 'High' confidence: Select 1-5 items.
+   - 'Suggested' confidence: Select 1-5 items.
+4. Provide the output only in the requested JSON format.
 `;
 
 const RESPONSE_SCHEMA = {
@@ -77,11 +70,11 @@ const RESPONSE_SCHEMA = {
     description: { "type": "STRING", "description": "A brief, 1-sentence summary of the main activity/context found in the photo." },
     matchedPassions: {
       "type": "ARRAY",
-      "description": "A list of 2 to 10 passions from the provided list that best match the photo's content, categorized by confidence level (High or Suggested).",
+      "description": "A list of 2 to 10 itinerary items from the provided list that best match the photo's content, categorized by confidence level (High or Suggested).",
       "items": {
         "type": "OBJECT",
         "properties": {
-          "passionName": { "type": "STRING", "description": "The name of the passion from the provided list." },
+          "passionName": { "type": "STRING", "description": "The name of the itinerary item from the provided list." },
           "confidence": { "type": "STRING", "description": "Must be one of: 'High' or 'Suggested'." }
         },
         "required": ["passionName", "confidence"]
