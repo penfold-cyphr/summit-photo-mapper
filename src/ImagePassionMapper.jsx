@@ -44,20 +44,24 @@ const ALL_PASSIONS = [
 ];
 
 const PROMPT_TEMPLATE = (passionList, metadataContext) => `
-Analyze the provided image and its metadata to recommend itinerary items for **Summit at Sea 2024**.
+Analyze the provided image and its metadata to recommend specific itinerary items for **Summit at Sea 2024**.
 Metadata Context: ${metadataContext}
 
-The user is attending Summit at Sea 2024, a transformative festival on a cruise ship featuring world-class talks, wellness, and music.
+The user is attending Summit at Sea 2024. Use the visual cues to map the image to the following specific lineup:
 
-**Event Context for Matching:**
-- **Music:** Matches artists like Diplo, Moodymann, D-Nice, Just Blaze, or vibes like Dante's HiFi+ (vinyl).
-- **Talks:** Matches themes of AI, conservation (Jane Goodall/Ocean Conservancy vibes), business (Under Armour/Virgin), or spirituality (Robert Thurman).
-- **Wellness:** Matches yoga, fitness (Wimberlean), meditation (Ziva), or biohacking.
-- **Art:** Matches sculptures (Nikolai Haas), light art (Leo Villareal), or live performance.
-- **Food:** Matches fine dining or fun brunches.
+**Key Lineup & Vibe Context:**
+- **Music & Nightlife:** Matches Diplo, Moodymann, D-Nice, Just Blaze, Dante's HiFi+ (Vinyl Listening), Walshy Fire, Natasha Diggs (Soul in the Horn), DJ Whoo Kid, Heimlich Knüller, DRĖĖĖMY, Stolen Nova, or Matthew O. Brimer.
+- **Talks & Ideas:** Matches Megan Rapinoe & Sue Bird, Dr. Mark Hyman (Longevity), Steven Kotler (Flow State), Imran Chaudhri (Humane/AI), Kevin Plank (Under Armour), Jennifer Morris (Nature Conservancy), Robert Thurman (Buddhism), or Fab 5 Freddy.
+- **Wellness & Movement:** Matches Wimberlean (Jason Wimberly), Ziva Meditation (Emily Fletcher), Neurosculpting (Lisa Wimberger), The Class, or Morning Yoga.
+- **Art & Performance:** Matches Leo Villareal (Light Art), Nikolai Haas (Sculpture), J. Ivy (Poetry), The Great Bingo Revival, or Comedy with Ben Gleib.
+- **Food & Community:** Matches Kishi Brothers Brunch, Michelin-inspired dining, Singles Mixers, or Climate Investors Meetup.
 
+**Instructions:**
 1. **Describe** the main activity or vibe of the photo in one concise sentence.
 2. **Map** the image content to the provided Summit at Sea 2024 itinerary items: [${passionList.join(', ')}].
+   - *Example:* A gym/workout photo matches "Functional Fitness (Wimberlean)".
+   - *Example:* A nature/ocean photo matches "Social Impact & Conservation" or "Ocean & Marine Life".
+   - *Example:* A party photo matches "DJ Sets & Dance Parties" or specific vibes like "Electronic & House Music".
 3. **Select** the most relevant itinerary items:
    - 'High' confidence: Select 1-5 items.
    - 'Suggested' confidence: Select 1-5 items.
