@@ -420,7 +420,7 @@ const App = () => {
         
         <header className="text-center mb-12">
           <h1 className="text-4xl sm:text-5xl font-extrabold text-gray-800 flex flex-col items-center justify-center gap-2">
-            Fora Photo Passions
+            Summit Photo Passions
           </h1>
           <p className="text-gray-600 mt-3 text-lg sm:text-xl">Discover the passions hidden in your travel photos.</p>
         </header>
