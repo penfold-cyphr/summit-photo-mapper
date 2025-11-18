@@ -3,64 +3,72 @@ import {
   RefreshCw, Upload, Sparkles, Image as ImageIcon, X, ImagePlus, AlertTriangle, 
   Calendar, Camera, MapPin 
 } from 'lucide-react';
-// Removed ExifReader import to fix build error
+import * as ExifReader from 'exifreader';
 
 // --- Constants and Configuration ---
 
 const MAX_FILES = 25;
 const API_MODEL = "gemini-2.5-flash-preview-09-2025";
-// System prompt instruction: The execution environment provides the key at runtime.
-const apiKey = ""; 
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`;
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=`;
 
-const VERCEL_EMBEDDED_API_KEY = apiKey || '';
+const VERCEL_EMBEDDED_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
 
 const ALL_PASSIONS = [
-  // --- Talks & Learning ---
-  "Keynote Talks", "Future-Defining Talks", "Science & Innovation", "Business & Entrepreneurship", 
-  "Climate Action Track", "Tech & AI", "Social Impact", "Storytelling",
+  // --- Nature & Outdoor Activities ---
+  "Wildlife", "Hike & Glamp", "Safari", "Ski & Snowboard", "Bike", "Trail Running", 
+  "Rock Climbing", "Fish", "Scuba & Snorkel", "Kayak & Canoe", "Surf", "Nature", 
+  "Paddleboarding", "Sailing & Boating", "Horse Riding", "Waterfront", "Mountains", 
+  "Adventure Sports",
 
-  // --- Music & Entertainment ---
-  "Live Music Performance", "DJ Sets", "Vinyl Record Room", "Karaoke Lounge", 
-  "Comedy", "Spoken Word & Poetry", "Dance Performance", "Nightlife",
+  // --- Sports & Physical Activities ---
+  "Golf", "Tennis", "Running", "Swimming", "Water Sports", "Cardio", 
+  "Strength Training", "Yoga",
 
-  // --- Wellness & Fitness ---
-  "Yoga & Meditation", "Breathwork", "Sound Healing", "Fitness Training", 
-  "Mindfulness", "Aquatic Club", "Spa & Relaxation", "Movement Workshops",
-
-  // --- Art & Culture ---
-  "Art Installations", "Visual Arts", "Interactive Exhibits", "Cultural Performance", 
-  "Film Screenings", "Live Painting",
+  // --- Travel & Culture ---
+  "Beach Retreat", "City Exploration", "Local Culture", "Landmarks", "Museums",
+  "Historical Events", "Architecture",
 
   // --- Food & Drink ---
-  "Culinary Experiences", "Michelin-Starred Dining", "Mixology & Cocktails", 
-  "Casual Dining", "Wine Tasting",
+  "Restaurants", "Foodie Trends", "Fine Dining", "Local Cuisine", "Cooking & Baking",
+  "Wine", "Beer", "Spirits", "Coffee", "Mixology",
 
-  // --- Social & Community ---
-  "Networking", "Singles Connections", "Community Building", "Arcade & Games", 
-  "Workshops",
+  // --- Health & Wellness ---
+  "Longevity", "Medical", "Mindfulness", "Healthy Food", "Self-care & Pamper", "Sleep",
 
-  // --- Adventure & Nature ---
-  "Virgin Beach Club (Bimini)", "Water Sports", "Sailing & Cruising", 
-  "Nature & Wildlife", "Ocean Conservation"
+  // --- Home, Family & Social Life ---
+  "Home & Garden", "Kids & Grandkids", "Pets", "Friends", "Community Care",
+
+  // --- Knowledge, Tech & Societal Interests ---
+  "Business & Finance", "Skill Building", "Pro. Development", "Emerging Tech",
+  "Sustainability", "Politics & Current Events", "STEM",
+
+  // --- Arts, Creation & Hobbies ---
+  "Art & Photography", "Painting & Drawing", "Sculpting", "Crafts", "Creation",
+  "Theater", "Literature", "Music", "Festivals & Concerts",
+
+  // --- Collecting & Specialized Interests ---
+  "Classic Cars", "Antiques & Vintage", "Fashion", "Beauty", "Shopping",
+
+  // --- Entertainment & Fandom ---
+  "Artist Fandom", "Show Fandom", "Movie Genres", "Hollywood Culture", "Actor Fandom",
+  "Animation & Fandom", "Video Games", "Gambling", "Theme Parks",
+
+  // --- Competitive Sports Fandom ---
+  "Football", "Formula 1", "Soccer", "Basketball", "Baseball", "Winter Sports"
 ];
 
 const PROMPT_TEMPLATE = (passionList, metadataContext) => `
-Analyze the provided image and its metadata to recommend itinerary items for the "Summit at Sea" event.
+Analyze the provided image and its metadata.
 Metadata Context: ${metadataContext}
 
-The user is attending Summit at Sea, a festival and conference on a cruise ship featuring talks, music, wellness, and art.
-
-1. Describe the main activity or vibe of the photo in one concise sentence.
-2. Based on the visual cues and context, map the image content to the following Summit at Sea itinerary items: [${passionList.join(', ')}].
-   - Example: A photo of nature or the ocean might match "Virgin Beach Club (Bimini)" or "Climate Action Track".
-   - Example: A photo of food matches "Culinary Experiences".
-   - Example: A photo of a party or concert matches "DJ Sets" or "Live Music Performance".
-   - Example: A photo of exercise matches "Yoga & Meditation" or "Fitness Training".
-3. Select the most relevant itinerary items:
-   - 'High' confidence: Select a minimum of 1 and a maximum of 5 items.
-   - 'Suggested' confidence: Select a minimum of 1 and a maximum of 5 items.
-4. Provide the output only in the requested JSON format.
+1. Describe the main activity or context of the photo in one concise sentence. Use the metadata (especially location or date) to add context if relevant (e.g., "A person skiing in [Location]" or "A family celebrating [Event] in [Year]").
+2. Based on the activities, context, and metadata, map the image content to the following list of passions: [${passionList.join(', ')}].
+3. **IMPORTANT RULE for 'Art & Photography':** Only match 'Art & Photography' if the photo depicts someone actively **taking a picture**, **creating art**, or **viewing art/exhibits**. Do not match it simply because the image is a photograph.
+4. Select the most relevant passions and categorize them:
+   - 'High' confidence: Select a minimum of 1 and a maximum of 5 passions.
+   - 'Suggested' confidence: Select a minimum of 1 and a maximum of 5 passions.
+   - **DO NOT** use any other confidence labels (e.g., 'Medium').
+5. Provide the output only in the requested JSON format.
 `;
 
 const RESPONSE_SCHEMA = {
@@ -69,11 +77,11 @@ const RESPONSE_SCHEMA = {
     description: { "type": "STRING", "description": "A brief, 1-sentence summary of the main activity/context found in the photo." },
     matchedPassions: {
       "type": "ARRAY",
-      "description": "A list of 2 to 10 itinerary items from the provided list that best match the photo, categorized by confidence level.",
+      "description": "A list of 2 to 10 passions from the provided list that best match the photo's content, categorized by confidence level (High or Suggested).",
       "items": {
         "type": "OBJECT",
         "properties": {
-          "passionName": { "type": "STRING", "description": "The name of the itinerary item from the provided list." },
+          "passionName": { "type": "STRING", "description": "The name of the passion from the provided list." },
           "confidence": { "type": "STRING", "description": "Must be one of: 'High' or 'Suggested'." }
         },
         "required": ["passionName", "confidence"]
@@ -159,7 +167,7 @@ const ImagePreview = ({ file, isProcessing, onRemove, index }) => {
   );
 };
 
-// --- Result Card Component ---
+// --- THIS COMPONENT CONTAINS THE FIX ---
 const ResultCard = ({ result, file }) => {
   const [previewUrl, setPreviewUrl] = useState(null);
 
@@ -204,7 +212,25 @@ const ResultCard = ({ result, file }) => {
                 <Calendar className="w-3.5 h-3.5" /> {metadata.date}
               </span>
             )}
-            {/* Removed Camera/Location specifics that relied on ExifReader */}
+            {metadata.camera && (
+              <span className="flex items-center gap-1.5" title="Camera Model">
+                <Camera className="w-3.5 h-3.5" /> {metadata.camera}
+              </span>
+            )}
+            {/* --- FIX IS HERE --- */}
+            {metadata.location && (
+              <a 
+                // Use the correct, standard Google Maps URL
+                href={`https://www.google.com/maps?q=${metadata.location.lat},${metadata.location.lng}`} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 text-blue-600 hover:underline"
+                title="View on Map"
+              >
+                <MapPin className="w-3.5 h-3.5" /> View Map
+              </a>
+            )}
+            {/* --- END FIX --- */}
           </div>
         )}
 
@@ -272,24 +298,48 @@ const App = () => {
   const analyzeImages = async () => {
     if (selectedFiles.length === 0 || loading) return;
 
-    // Removed explicit API key check for this environment
-    
+    const currentApiKey = VERCEL_EMBEDDED_API_KEY; 
+    if (!currentApiKey) {
+      setError("API Key Missing! Please set the VITE_GEMINI_API_KEY environment variable.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     const processedFilesData = await Promise.all(selectedFiles.map(async (file) => {
       try {
-        const base64Data = await toBase64(file);
-        
-        // Simplified Metadata Extraction (No ExifReader)
+        const [base64Data, tags] = await Promise.all([
+          toBase64(file),
+          ExifReader.load(file).catch(err => {
+            console.warn(`Could not read EXIF data for ${file.name}:`, err);
+            return {};
+          })
+        ]);
+
         let metadataContext = "No additional metadata available.";
         let extractedMetadata = { date: null, camera: null, location: null };
+        
+        const date = tags.DateTimeOriginal?.description;
+        const camera = tags.Model?.description;
+        const lat = tags.GPSLatitude?.description;
+        const lng = tags.GPSLongitude?.description;
 
-        if (file.lastModified) {
-            const dateObj = new Date(file.lastModified);
-            const dateStr = dateObj.toLocaleDateString();
-            extractedMetadata.date = dateStr;
-            metadataContext = `Date taken/modified: ${dateStr}`;
+        let metadataParts = [];
+        if (date) {
+          metadataParts.push(`Date taken: ${date}`);
+          extractedMetadata.date = date;
+        }
+        if (camera) {
+          metadataParts.push(`Camera: ${camera}`);
+          extractedMetadata.camera = camera;
+        }
+        if (lat !== undefined && lng !== undefined) {
+          extractedMetadata.location = { lat, lng };
+          metadataParts.push(`Location: (${lat.toFixed(6)}, ${lng.toFixed(6)})`);
+        }
+        if (metadataParts.length > 0) {
+          metadataContext = "Use the following metadata to improve the analysis: " + metadataParts.join('; ');
         }
         
         return { file, base64Data, metadata: extractedMetadata, metadataContext, error: null };
@@ -309,6 +359,7 @@ const App = () => {
     }));
     setResults(initialResults);
 
+    const apiUrlWithKey = API_URL + currentApiKey;
     let currentResults = [...initialResults];
 
     for (let i = 0; i < processedFilesData.length; i++) {
@@ -333,7 +384,7 @@ const App = () => {
           }
         };
 
-        const response = await exponentialBackoffFetch(API_URL, {
+        const response = await exponentialBackoffFetch(apiUrlWithKey, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -363,7 +414,7 @@ const App = () => {
   };
 
   const displayApiKey = VERCEL_EMBEDDED_API_KEY;
-  const isButtonDisabled = loading || selectedFiles.length === 0;
+  const isButtonDisabled = loading || selectedFiles.length === 0 || !displayApiKey;
   const numProcessed = results.filter(r => !r.processing && (r.data || r.error)).length;
 
   return (
@@ -372,14 +423,21 @@ const App = () => {
         
         <header className="text-center mb-12">
           <h1 className="text-4xl sm:text-5xl font-extrabold text-gray-800 flex flex-col items-center justify-center gap-2">
-            Summit at Sea Matcher
+            Fora Photo Passions
           </h1>
-          <p className="text-gray-600 mt-3 text-lg sm:text-xl">Discover your perfect itinerary based on your photos.</p>
+          <p className="text-gray-600 mt-3 text-lg sm:text-xl">Discover the passions hidden in your travel photos.</p>
         </header>
+
+        {!displayApiKey && (
+          <div className="mb-8 p-4 bg-yellow-100 text-yellow-800 rounded-lg border border-yellow-300 font-medium text-center flex items-center justify-center gap-2">
+            <AlertTriangle className="w-5 h-5" /> 
+            **API Key Required:** Please deploy to Vercel and set the `VITE_GEMINI_API_KEY` environment variable.
+          </div>
+        )}
 
         <section className="mb-12 p-6 bg-gray-50 rounded-lg shadow-sm border border-gray-200">
           <h2 className="text-2xl font-semibold text-gray-800 mb-6 flex items-center gap-3">
-            <ImagePlus className="w-6 h-6 text-indigo-500" /> Upload Photos (Max {MAX_FILES})
+            <ImagePlus className="w-6 h-6 text-indigo-500" /> Upload Your Memories (Max {MAX_FILES})
           </h2>
           <label
             htmlFor="file-upload"
@@ -438,7 +496,7 @@ const App = () => {
               ) : (
                 <>
                   <Sparkles className="w-6 h-6" />
-                  Get Recommendations
+                  Analyze Photos
                 </>
               )}
             </button>
@@ -449,7 +507,7 @@ const App = () => {
         {results.length > 0 && (
           <section className="p-6 bg-white rounded-lg shadow-md border border-gray-100">
             <h2 className="text-2xl font-semibold text-gray-800 mb-6 border-b pb-4 flex items-center gap-3">
-              <Sparkles className="w-6 h-6 text-indigo-500" /> Your Summit Itinerary
+              <Sparkles className="w-6 h-6 text-indigo-500" /> Your Photo Passions
             </h2>
             <div className="space-y-6">
               {results.map((result, index) => (
