@@ -7,7 +7,7 @@ import {
 // --- Constants and Configuration ---
 
 const MAX_FILES = 25;
-const API_MODEL = "gemini-flash-latest";
+const API_MODEL = "gemini-3-flash-preview";
 const apiKey = ""; // The execution environment provides the key at runtime.
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=`;
 
