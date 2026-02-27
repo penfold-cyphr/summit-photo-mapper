@@ -9,16 +9,26 @@ import {
 const MAX_FILES = 25;
 
 /** * NOTE FOR LOCAL/VERCEL DEPLOYMENT:
- * We use a defensive helper to access the API Key across different environments.
+ * Environment variables in Vite/Vercel are accessed differently depending on the bundler.
  */
 const getEnvApiKey = () => {
-  // 1. Internal environment key
+  // 1. Internal environment key (for Canvas preview)
   if (typeof __gemini_api_key !== 'undefined' && __gemini_api_key) return __gemini_api_key;
   
-  // 2. Standard keys for Vite/Next.js/Vercel
+  // 2. Try Vite's environment access (Standard for Vite/Vercel React apps)
+  // We use a try-catch to prevent crashes in environments where import.meta is restricted
   try {
-    if (typeof process !== 'undefined' && (process.env?.VITE_GEMINI_API_KEY || process.env?.NEXT_PUBLIC_GEMINI_API_KEY)) {
-      return process.env.VITE_GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    // @ts-ignore
+    const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (viteKey) return viteKey;
+  } catch (e) {}
+
+  // 3. Try standard process.env (Standard for Next.js/Webpack)
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      return process.env.VITE_GEMINI_API_KEY || 
+             process.env.NEXT_PUBLIC_GEMINI_API_KEY || 
+             process.env.REACT_APP_GEMINI_API_KEY || "";
     }
   } catch (e) {}
 
@@ -242,7 +252,7 @@ const App = () => {
     if (selectedFiles.length === 0 || loading) return;
 
     if (!apiKey) {
-      setError("API Key is missing. If running locally, set VITE_GEMINI_API_KEY in your environment variables.");
+      setError("API Key is missing. If running locally, set VITE_GEMINI_API_KEY in your environment variables. On Vercel, ensure it's added to Project Settings.");
       return;
     }
 
