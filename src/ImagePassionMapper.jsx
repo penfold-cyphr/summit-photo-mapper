@@ -7,11 +7,11 @@ import {
 // --- Constants and Configuration ---
 
 const MAX_FILES = 25;
-const API_MODEL = "gemini-3-flash-preview";
+// Updated to the correct supported model for this environment
+const API_MODEL = "gemini-2.5-flash-preview-09-2025";
 const apiKey = ""; // The execution environment provides the key at runtime.
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=`;
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`;
 
-// Updated List based on Sky Essentials and common streaming subscriptions
 const SKY_SUBSCRIPTION_ITEMS = [
   "Netflix",
   "Disney+",
@@ -34,19 +34,14 @@ const PROMPT_TEMPLATE = (passionList, metadataContext) => `
 Analyze the provided image of a TV home screen or app menu.
 ${metadataContext ? `Metadata Context: ${metadataContext}` : ''}
 
-Context: The user wants to detect which streaming service app icons are present on their TV to see if they can save money by switching to a 'Sky Essentials' combined subscription (https://www.sky.com/deals).
+Context: The user wants to detect which streaming service app icons are present on their TV to see if they can save money by switching to a 'Sky Essentials' combined subscription.
 
 1. Describe the TV setup or the variety of apps visible in one concise sentence.
 2. Based on the visual icons, map the image to the provided subscription list: [${passionList.join(', ')}].
-   - Example: A Netflix icon -> Match to "Netflix".
-   - Example: A Disney plus logo -> Match to "Disney+".
-   - Example: A sports app -> Match to "Sky Sports" or "BT Sport".
-
 3. Select the detected apps and categorize them:
    - 'High' confidence: Clearly visible icons found in the list.
    - 'Suggested' confidence: Partially visible or related service icons.
-   - **DO NOT** use any other confidence labels.
-4. Provide the output only in the requested JSON format.
+4. Provide the output only in JSON format.
 `;
 
 const RESPONSE_SCHEMA = {
@@ -78,32 +73,26 @@ const toBase64 = (file) => new Promise((resolve, reject) => {
   reader.onerror = (error) => reject(error);
 });
 
-const exponentialBackoffFetch = async (url, options, maxRetries = 3) => {
+const exponentialBackoffFetch = async (url, options, maxRetries = 5) => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const response = await fetch(url, options);
-      if (response.ok) {
-        return response;
-      }
-      if (response.status === 429 && attempt < maxRetries - 1) {
-        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+      if (response.ok) return response;
+      
+      // Handle rate limits or temporary server errors
+      if ((response.status === 429 || response.status >= 500) && attempt < maxRetries - 1) {
+        const delay = Math.pow(2, attempt) * 1000;
         await new Promise(resolve => setTimeout(resolve, delay));
-        console.warn(`Retrying API call in ${delay}ms... (Attempt ${attempt + 1})`);
         continue;
       }
-      throw new Error(`API call failed with status: ${response.status} ${response.statusText}`);
+      throw new Error(`API error: ${response.status}`);
     } catch (error) {
-      if (attempt === maxRetries - 1) {
-        console.error("Fetch failed after all retries:", error);
-        throw error;
-      }
-      const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+      if (attempt === maxRetries - 1) throw error;
+      const delay = Math.pow(2, attempt) * 1000;
       await new Promise(resolve => setTimeout(resolve, delay));
-      console.warn(`Retrying network failure in ${delay}ms... (Attempt ${attempt + 1})`);
     }
   }
 };
-
 
 // --- React Components ---
 
@@ -119,11 +108,11 @@ const ImagePreview = ({ file, isProcessing, onRemove, index }) => {
   }, [file]);
 
   return (
-    <div className="relative w-full aspect-square rounded-lg overflow-hidden shadow-sm border border-gray-200">
+    <div className="relative w-full aspect-square rounded-lg overflow-hidden shadow-sm border border-gray-200 bg-gray-50">
       {previewUrl ? (
         <img src={previewUrl} alt={file.name} className="w-full h-full object-cover" />
       ) : (
-        <div className="w-full h-full flex items-center justify-center bg-gray-50">
+        <div className="w-full h-full flex items-center justify-center">
           <ImageIcon className="w-8 h-8 text-gray-400" />
         </div>
       )}
@@ -132,11 +121,10 @@ const ImagePreview = ({ file, isProcessing, onRemove, index }) => {
           <RefreshCw className="w-6 h-6 text-white animate-spin" />
         </div>
       )}
-      {onRemove && (
+      {!isProcessing && onRemove && (
         <button
           onClick={() => onRemove(index)}
-          className="absolute top-1 right-1 bg-white text-gray-700 rounded-full p-1 shadow-md hover:bg-gray-100 transition"
-          aria-label={`Remove ${file.name}`}
+          className="absolute top-1 right-1 bg-white/90 text-gray-700 rounded-full p-1 shadow-md hover:bg-white transition"
         >
           <X className="w-4 h-4" />
         </button>
@@ -157,47 +145,43 @@ const ResultCard = ({ result, file }) => {
   }, [file]);
 
   const getConfidenceClass = (confidence) => {
-    switch (confidence) {
-      case 'High':
-        return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-      case 'Suggested':
-        return 'bg-teal-50 text-teal-700 border-teal-200';
-      default:
-        return 'bg-gray-50 text-gray-700 border-gray-200';
-    }
+    return confidence === 'High' 
+      ? 'bg-indigo-50 text-indigo-700 border-indigo-200' 
+      : 'bg-teal-50 text-teal-700 border-teal-200';
   };
 
-  const isError = result.error;
-  // Metadata support is simplified here as ExifReader was removed
-  const { metadata } = result;
-
   return (
-    <div className={`flex flex-col md:flex-row gap-4 p-4 rounded-lg border ${isError ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white'} shadow-sm`}>
-      <div className="flex-shrink-0 w-full md:w-36 h-36 rounded-md overflow-hidden bg-gray-100 flex items-center justify-center">
+    <div className={`flex flex-col md:flex-row gap-4 p-4 rounded-xl border ${result.error ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-white'} shadow-sm transition-all`}>
+      <div className="flex-shrink-0 w-full md:w-40 h-40 rounded-lg overflow-hidden bg-gray-100 border border-gray-200">
         {previewUrl ? (
-          <img src={previewUrl} alt={result.fileName} className="w-full h-full object-cover" />
+          <img src={previewUrl} alt="Analysis Target" className="w-full h-full object-cover" />
         ) : (
-          <ImageIcon className="w-10 h-10 text-gray-400" />
+          <div className="w-full h-full flex items-center justify-center">
+            <ImageIcon className="w-10 h-10 text-gray-300" />
+          </div>
         )}
       </div>
       <div className="flex-grow">
-        <h3 className="text-xl font-semibold text-gray-800 mb-2">{result.fileName}</h3>
+        <div className="flex justify-between items-start mb-2">
+          <h3 className="text-lg font-bold text-gray-800 truncate max-w-[250px]">{result.fileName}</h3>
+          {result.error && <AlertTriangle className="w-5 h-5 text-red-500" />}
+        </div>
         
-        {isError ? (
-          <p className="text-red-600 font-medium flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5" /> Error: {result.error}
-          </p>
+        {result.error ? (
+          <p className="text-red-600 text-sm font-medium">Error: {result.error}</p>
         ) : (
           <>
-            <p className="text-gray-600 mb-3 text-sm leading-relaxed">
-              <span className="font-medium text-gray-700">Detection Analysis:</span> {result.description || 'No subscriptions detected.'}
-            </p>
-            <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
-              {(result.matchedPassions || []).map((match, i) => (
-                <span key={i} className={`text-xs font-medium py-1 px-3 rounded-full border ${getConfidenceClass(match.confidence)}`}>
-                  {match.passionName} <span className="text-gray-500">({match.confidence})</span>
-                </span>
-              ))}
+            <p className="text-gray-600 text-sm italic mb-4">"{result.description}"</p>
+            <div className="flex flex-wrap gap-2">
+              {result.matchedPassions?.length > 0 ? (
+                result.matchedPassions.map((match, i) => (
+                  <span key={i} className={`text-xs font-semibold py-1.5 px-3 rounded-lg border ${getConfidenceClass(match.confidence)}`}>
+                    {match.passionName}
+                  </span>
+                ))
+              ) : (
+                <span className="text-xs text-gray-400">No matching subscriptions detected.</span>
+              )}
             </div>
           </>
         )}
@@ -210,48 +194,32 @@ const ResultCard = ({ result, file }) => {
 
 const App = () => {
   const [selectedFiles, setSelectedFiles] = useState([]);
-  const [results, setResults] = useState([]); // Stores { file, data, error, processing, metadata }
+  const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
-
-  // Inject Tailwind CSS
-  useEffect(() => {
-    if (!document.querySelector('#tailwind-script')) {
-      const script = document.createElement('script');
-      script.id = 'tailwind-script';
-      script.src = 'https://cdn.tailwindcss.com';
-      document.head.appendChild(script);
-    }
-  }, []);
 
   const handleFileChange = (event) => {
     setError(null);
     const newFiles = Array.from(event.target.files).filter(file => file.type.startsWith('image/'));
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value = null;
-    }
-
     if (selectedFiles.length + newFiles.length > MAX_FILES) {
-      setError(`Maximum of ${MAX_FILES} photos allowed. Please select fewer files.`);
+      setError(`Maximum of ${MAX_FILES} photos allowed.`);
       return;
     }
 
-    setSelectedFiles(prev => {
-      const updated = [...prev, ...newFiles].slice(0, MAX_FILES);
-      if (prev.length !== updated.length) setResults([]);
-      return updated;
-    });
+    if (newFiles.length > 0) {
+      setSelectedFiles(prev => [...prev, ...newFiles]);
+      setResults([]); // Clear results when new files are added to prevent sync issues
+    }
+    
+    if (fileInputRef.current) fileInputRef.current.value = null;
   };
 
   const removeFile = (indexToRemove) => {
     if (loading) return;
-    setSelectedFiles(prev => {
-      const updatedFiles = prev.filter((_, i) => i !== indexToRemove);
-      setResults([]);
-      return updatedFiles;
-    });
+    setSelectedFiles(prev => prev.filter((_, i) => i !== indexToRemove));
+    setResults([]);
   };
 
   const analyzeImages = async () => {
@@ -259,50 +227,27 @@ const App = () => {
 
     setLoading(true);
     setError(null);
-
-    const processedFilesData = await Promise.all(selectedFiles.map(async (file) => {
-      try {
-        const base64Data = await toBase64(file);
-        
-        // Removed ExifReader dependency to prevent build errors
-        // Metadata logic is simplified to placeholders or empty for now
-        let metadataContext = ""; 
-        let extractedMetadata = { date: null, camera: null, location: null };
-        
-        return { file, base64Data, metadata: extractedMetadata, metadataContext, error: null };
-
-      } catch (preprocessingError) {
-        console.error(`Failed to preprocess ${file.name}:`, preprocessingError);
-        return { file, base64Data: null, metadata: null, metadataContext: null, error: preprocessingError.message || "Failed to read file" };
-      }
-    }));
-
-    const initialResults = processedFilesData.map(pf => ({
-      file: pf.file,
+    
+    // Initialize results state
+    const initialResults = selectedFiles.map(file => ({
+      file,
       data: null,
-      error: pf.error,
-      processing: !pf.error,
-      metadata: pf.metadata
+      error: null,
+      processing: true
     }));
     setResults(initialResults);
 
-    const apiUrlWithKey = API_URL + apiKey;
-    let currentResults = [...initialResults];
-
-    for (let i = 0; i < processedFilesData.length; i++) {
-      const pf = processedFilesData[i];
-      
-      if (pf.error) continue; 
-      
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const file = selectedFiles[i];
       try {
-        const prompt = PROMPT_TEMPLATE(SKY_SUBSCRIPTION_ITEMS, pf.metadataContext);
-        const mimeType = pf.file.type;
+        const base64Data = await toBase64(file);
+        const prompt = PROMPT_TEMPLATE(SKY_SUBSCRIPTION_ITEMS, "");
 
         const payload = {
           contents: [{
             parts: [
               { text: prompt },
-              { inlineData: { mimeType, data: pf.base64Data } }
+              { inlineData: { mimeType: file.type, data: base64Data } }
             ]
           }],
           generationConfig: {
@@ -311,88 +256,80 @@ const App = () => {
           }
         };
 
-        const response = await exponentialBackoffFetch(apiUrlWithKey, {
+        const response = await exponentialBackoffFetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
 
         const apiResult = await response.json();
-        const candidate = apiResult.candidates?.[0];
-        const jsonText = candidate?.content?.parts?.[0]?.text;
+        const jsonText = apiResult.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (jsonText) {
           const parsedJson = JSON.parse(jsonText);
-          currentResults[i] = { ...currentResults[i], data: parsedJson, error: null, processing: false };
+          setResults(prev => {
+            const newRes = [...prev];
+            newRes[i] = { ...newRes[i], data: parsedJson, processing: false };
+            return newRes;
+          });
         } else {
-          const errorMessage = apiResult.error?.message || apiResult.error?.details?.[0]?.message || "Model response was empty or malformed.";
-          console.error(`Error processing ${pf.file.name}:`, apiResult);
-          currentResults[i] = { ...currentResults[i], data: null, error: errorMessage, processing: false };
+          throw new Error("Invalid model response");
         }
-      } catch (fileError) {
-        console.error(`Error with file ${pf.file.name}:`, fileError);
-        currentResults[i] = { ...currentResults[i], data: null, error: fileError.message || 'File processing failed', processing: false };
+      } catch (err) {
+        setResults(prev => {
+          const newRes = [...prev];
+          newRes[i] = { ...newRes[i], error: err.message, processing: false };
+          return newRes;
+        });
       }
-
-      setResults([...currentResults]);
     }
-    
     setLoading(false);
   };
 
-  const isButtonDisabled = loading || selectedFiles.length === 0;
   const numProcessed = results.filter(r => !r.processing && (r.data || r.error)).length;
 
   return (
-    <div className="min-h-screen bg-white text-gray-900 font-sans">
-      <div className="max-w-4xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-        
-        <header className="text-center mb-12">
-            <div className="flex items-center justify-center gap-3 mb-4">
-                <Tv className="w-10 h-10 text-indigo-600" />
-            </div>
-          <h1 className="text-4xl sm:text-5xl font-extrabold text-gray-800 flex flex-col items-center justify-center gap-2">
-            Sky Essentials
-            <span className="text-2xl sm:text-3xl font-semibold text-indigo-600">Savings Calculator</span>
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans p-4 sm:p-8">
+      <div className="max-w-4xl mx-auto">
+        <header className="text-center mb-10">
+          <div className="inline-flex items-center justify-center p-3 bg-indigo-600 rounded-2xl mb-4 shadow-lg">
+            <Tv className="w-8 h-8 text-white" />
+          </div>
+          <h1 className="text-4xl font-black tracking-tight text-slate-800">
+            Sky Essentials <span className="text-indigo-600">Savings</span>
           </h1>
-          <p className="text-gray-600 mt-3 text-lg sm:text-xl">Upload a photo of your TV apps to see how much you could save with a single subscription.</p>
+          <p className="text-slate-500 mt-2 text-lg">Upload your TV home screen to find subscription overlaps.</p>
         </header>
 
-        {/* --- Quick Match Methods --- */}
-        <section className="mb-12 grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <button 
-            className="flex items-center justify-center gap-2 p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:border-indigo-300 hover:bg-indigo-50 transition"
-          >
-            <ClipboardList className="w-5 h-5 text-indigo-500" />
-            <span className="font-medium">Manual Quiz</span>
-          </button>
-          <button 
-            className="flex items-center justify-center gap-2 p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:border-indigo-300 hover:bg-indigo-50 transition"
-          >
-            <Banknote className="w-5 h-5 text-indigo-500" />
-            <span className="font-medium">Open Banking</span>
-          </button>
-          <button 
-            className="flex items-center justify-center gap-2 p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:border-indigo-300 hover:bg-indigo-50 transition"
-          >
-            <Mail className="w-5 h-5 text-indigo-500" />
-            <span className="font-medium">Connect Gmail</span>
-          </button>
-        </section>
+        {/* Quick Actions */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+          {[
+            { icon: ClipboardList, label: "Manual Quiz" },
+            { icon: Banknote, label: "Open Banking" },
+            { icon: Mail, label: "Connect Gmail" }
+          ].map((item, idx) => (
+            <button key={idx} className="flex items-center justify-center gap-3 p-4 bg-white border border-slate-200 rounded-xl shadow-sm hover:border-indigo-300 hover:bg-indigo-50 transition-colors group">
+              <item.icon className="w-5 h-5 text-indigo-500 group-hover:scale-110 transition-transform" />
+              <span className="font-semibold text-slate-700">{item.label}</span>
+            </button>
+          ))}
+        </div>
 
-        <section className="mb-12 p-6 bg-gray-50 rounded-lg shadow-sm border border-gray-200">
-          <h2 className="text-2xl font-semibold text-gray-800 mb-6 flex items-center gap-3">
-            <ImagePlus className="w-6 h-6 text-indigo-500" /> Photo Detection (Max {MAX_FILES})
-          </h2>
+        {/* Upload Area */}
+        <div className="mb-8 p-6 bg-white rounded-2xl shadow-sm border border-slate-200">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              <ImagePlus className="w-5 h-5 text-indigo-500" /> Photo Upload
+            </h2>
+            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Max {MAX_FILES} files</span>
+          </div>
+
           <label
             htmlFor="file-upload"
-            className="flex flex-col items-center justify-center p-10 border-2 border-dashed border-indigo-300 rounded-lg cursor-pointer hover:bg-indigo-50 transition duration-200 text-center"
+            className="flex flex-col items-center justify-center p-12 border-2 border-dashed border-slate-200 rounded-2xl cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/30 transition-all group"
           >
-            <Upload className="w-12 h-12 text-indigo-500 mb-4" />
-            <p className="text-indigo-600 font-medium text-lg">Click to browse or drag your TV screen photo here</p>
-            <p className="text-sm text-gray-500 mt-2">
-              JPG, PNG, GIF up to {MAX_FILES} files
-            </p>
+            <Upload className="w-10 h-10 text-slate-300 group-hover:text-indigo-500 mb-4 transition-colors" />
+            <p className="text-slate-600 font-medium">Click to select photos of your TV apps</p>
             <input
               id="file-upload"
               type="file"
@@ -401,87 +338,88 @@ const App = () => {
               onChange={handleFileChange}
               className="hidden"
               ref={fileInputRef}
+              disabled={loading}
             />
           </label>
 
-          {error && <div className="mt-6 p-4 bg-red-100 text-red-700 rounded-md font-medium">{error}</div>}
+          {error && (
+            <div className="mt-4 p-3 bg-red-50 text-red-600 rounded-lg text-sm font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4" /> {error}
+            </div>
+          )}
 
           {selectedFiles.length > 0 && (
-            <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            <div className="mt-6 grid grid-cols-3 sm:grid-cols-5 gap-3">
               {selectedFiles.map((file, index) => (
                 <ImagePreview
-                  key={file.name + index}
+                  key={index}
                   file={file}
-                  isProcessing={results.find(r => r.file === file)?.processing || false}
+                  isProcessing={results[index]?.processing}
                   onRemove={removeFile}
                   index={index}
                 />
               ))}
             </div>
           )}
-        </section>
+        </div>
 
+        {/* Action Button */}
         {selectedFiles.length > 0 && (
-          <section className="mb-12 text-center">
+          <div className="flex justify-center mb-10">
             <button
               onClick={analyzeImages}
-              disabled={isButtonDisabled}
-              className={`w-full max-w-lg py-4 px-8 rounded-full text-xl font-bold transition-all duration-300 shadow-lg
-                ${isButtonDisabled
-                  ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-4 focus:ring-indigo-300 hover:scale-[1.01]'
-                }
-                flex items-center justify-center gap-3`}
+              disabled={loading}
+              className={`w-full max-w-md py-4 rounded-2xl text-lg font-bold shadow-xl transition-all flex items-center justify-center gap-3
+                ${loading 
+                  ? 'bg-slate-200 text-slate-500 cursor-not-allowed' 
+                  : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:-translate-y-0.5 active:translate-y-0'
+                }`}
             >
               {loading ? (
                 <>
-                  <RefreshCw className="w-6 h-6 animate-spin" />
-                  Analyzing Apps ({Math.min(numProcessed + 1, selectedFiles.length)} of {selectedFiles.length})...
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                  Analyzing ({numProcessed}/{selectedFiles.length})
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-6 h-6" />
+                  <Sparkles className="w-5 h-5" />
                   Calculate Potential Savings
                 </>
               )}
             </button>
-          </section>
+          </div>
         )}
 
-        {/* --- Results Display Area --- */}
-        {results.length > 0 && (
-          <section className="p-6 bg-white rounded-lg shadow-md border border-gray-100">
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6 border-b pb-4 flex items-center gap-3">
-              <Sparkles className="w-6 h-6 text-indigo-500" /> Detected Subscriptions
+        {/* Results */}
+        {results.some(r => r.data || r.error) && (
+          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+              <Sparkles className="w-6 h-6 text-yellow-500" /> Detected Subscriptions
             </h2>
-            <div className="space-y-6">
-              {results.map((result, index) => (
+            <div className="grid grid-cols-1 gap-4">
+              {results.map((result, idx) => (
                 (!result.processing && (result.data || result.error)) && (
                   <ResultCard 
-                    key={result.file.name + index} 
-                    result={{ 
-                      ...result.data, 
-                      fileName: result.file.name, 
-                      error: result.error,
-                      metadata: result.metadata
-                    }} 
-                    file={result.file} 
+                    key={idx} 
+                    file={result.file}
+                    result={{ ...result.data, fileName: result.file.name, error: result.error }} 
                   />
                 )
               ))}
-              {loading && results.some(r => r.processing) && (
-                 <div className="flex items-center justify-center py-6 text-gray-500 text-lg">
-                   <RefreshCw className="w-5 h-5 animate-spin mr-3" /> Still processing some images...
-                 </div>
-              )}
             </div>
-            <div className="mt-8 p-4 bg-indigo-600 text-white rounded-lg text-center">
-              <p className="text-lg font-semibold mb-2">Switch to Sky Essentials and combine these for one low price!</p>
-              <a href="https://www.sky.com/deals" target="_blank" rel="noopener noreferrer" className="underline font-bold hover:text-indigo-100">
-                View Sky Deals Now
+
+            <div className="mt-8 p-6 bg-gradient-to-br from-indigo-600 to-violet-700 text-white rounded-3xl shadow-xl text-center">
+              <p className="text-xl font-bold mb-4">Combine these into one Sky Essentials package and save up to £25/month!</p>
+              <a 
+                href="https://www.sky.com/deals" 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="inline-block py-3 px-8 bg-white text-indigo-600 rounded-full font-black hover:bg-indigo-50 transition-colors"
+              >
+                Explore Sky Deals
               </a>
             </div>
-          </section>
+          </div>
         )}
       </div>
     </div>
