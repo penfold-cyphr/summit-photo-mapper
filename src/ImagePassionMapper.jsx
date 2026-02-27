@@ -7,10 +7,27 @@ import {
 // --- Constants and Configuration ---
 
 const MAX_FILES = 25;
-// Updated to the correct supported model for this environment
-const API_MODEL = "gemini-2.5-flash-preview-09-2025";
-const apiKey = ""; // The execution environment provides the key at runtime.
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`;
+
+/** * NOTE FOR LOCAL/VERCEL DEPLOYMENT:
+ * We use a defensive helper to access the API Key across different environments.
+ */
+const getEnvApiKey = () => {
+  // 1. Internal environment key
+  if (typeof __gemini_api_key !== 'undefined' && __gemini_api_key) return __gemini_api_key;
+  
+  // 2. Standard keys for Vite/Next.js/Vercel
+  try {
+    if (typeof process !== 'undefined' && (process.env?.VITE_GEMINI_API_KEY || process.env?.NEXT_PUBLIC_GEMINI_API_KEY)) {
+      return process.env.VITE_GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    }
+  } catch (e) {}
+
+  return ""; 
+};
+
+// Updated as requested
+const API_MODEL = "gemini-3-flash-preview"; 
+const apiKey = getEnvApiKey();
 
 const SKY_SUBSCRIPTION_ITEMS = [
   "Netflix",
@@ -79,13 +96,14 @@ const exponentialBackoffFetch = async (url, options, maxRetries = 5) => {
       const response = await fetch(url, options);
       if (response.ok) return response;
       
-      // Handle rate limits or temporary server errors
       if ((response.status === 429 || response.status >= 500) && attempt < maxRetries - 1) {
         const delay = Math.pow(2, attempt) * 1000;
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
-      throw new Error(`API error: ${response.status}`);
+      
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `API error: ${response.status}`);
     } catch (error) {
       if (attempt === maxRetries - 1) throw error;
       const delay = Math.pow(2, attempt) * 1000;
@@ -190,8 +208,6 @@ const ResultCard = ({ result, file }) => {
   );
 };
 
-// --- Main App Component ---
-
 const App = () => {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [results, setResults] = useState([]);
@@ -210,7 +226,7 @@ const App = () => {
 
     if (newFiles.length > 0) {
       setSelectedFiles(prev => [...prev, ...newFiles]);
-      setResults([]); // Clear results when new files are added to prevent sync issues
+      setResults([]); 
     }
     
     if (fileInputRef.current) fileInputRef.current.value = null;
@@ -225,10 +241,14 @@ const App = () => {
   const analyzeImages = async () => {
     if (selectedFiles.length === 0 || loading) return;
 
+    if (!apiKey) {
+      setError("API Key is missing. If running locally, set VITE_GEMINI_API_KEY in your environment variables.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     
-    // Initialize results state
     const initialResults = selectedFiles.map(file => ({
       file,
       data: null,
@@ -236,6 +256,8 @@ const App = () => {
       processing: true
     }));
     setResults(initialResults);
+
+    const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent?key=${apiKey}`;
 
     for (let i = 0; i < selectedFiles.length; i++) {
       const file = selectedFiles[i];
@@ -273,7 +295,7 @@ const App = () => {
             return newRes;
           });
         } else {
-          throw new Error("Invalid model response");
+          throw new Error("Invalid model response. The model might not be accessible or content filters were triggered.");
         }
       } catch (err) {
         setResults(prev => {
@@ -301,7 +323,6 @@ const App = () => {
           <p className="text-slate-500 mt-2 text-lg">Upload your TV home screen to find subscription overlaps.</p>
         </header>
 
-        {/* Quick Actions */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
           {[
             { icon: ClipboardList, label: "Manual Quiz" },
@@ -315,7 +336,6 @@ const App = () => {
           ))}
         </div>
 
-        {/* Upload Area */}
         <div className="mb-8 p-6 bg-white rounded-2xl shadow-sm border border-slate-200">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
@@ -363,7 +383,6 @@ const App = () => {
           )}
         </div>
 
-        {/* Action Button */}
         {selectedFiles.length > 0 && (
           <div className="flex justify-center mb-10">
             <button
@@ -390,7 +409,6 @@ const App = () => {
           </div>
         )}
 
-        {/* Results */}
         {results.some(r => r.data || r.error) && (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
